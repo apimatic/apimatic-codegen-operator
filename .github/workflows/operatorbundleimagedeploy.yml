@@ -1,0 +1,155 @@
+name: Operator Bundle Image Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install CLI tools from OpenShift Mirror
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          source: 'mirror'
+          skip_cache: true
+          operator-sdk: 'latest'
+
+      - name: Login to Redhat Connect Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.REDHAT_REGISTRY }}
+          username: ${{ secrets.REDHAT_REGISTRY_USER }}
+          password: ${{ secrets.REDHAT_REGISTRY_PSWD }}
+
+      - name: Pull latest APIMatic CodeGen Operator Image and Get Version
+        run: |
+          docker pull ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-operator-ubi8:latest
+          
+          echo $(docker inspect --format "{{.Config.Labels.version}}" ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-operator-ubi8:latest) | sed 's/v//' > dummy.txt 
+          
+          echo $(docker inspect --format "{{ .RepoDigests }}" ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-operator-ubi8:latest) | sed 's/\[//' | sed 's/]//' > dummy2.txt
+          
+          echo $(docker inspect --format "{{ .Created }}" ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-operator-ubi8:latest) > dummy3.txt
+          
+          echo "CODEGENVERSIONLATEST=v$(cat dummy.txt)" >> $GITHUB_ENV
+          
+          echo "BUNDLEVERSIONLATEST=$(cat dummy.txt)" >> $GITHUB_ENV
+          
+          echo "REPODIGEST=$(cat dummy2.txt)" >> $GITHUB_ENV
+          
+          echo "CREATIONDATE=$(cat dummy3.txt)" >> $GITHUB_ENV
+          
+      - name: Verify Environmental Variables
+        run: |
+          echo ${{ env.CODEGENVERSIONLATEST }}
+          
+          echo ${{ env.BUNDLEVERSIONLATEST }}
+          
+          echo ${{ env.REPODIGEST }}
+          
+          echo ${{ env.CREATIONDATE }}
+          
+      - name: Escape backslash in REPODIGEST env variable to make it work with sed command in subsequent steps
+        run: |
+          echo ${{ env.REPODIGEST }} | sed 's;/;\\/;g' > dummy4.txt
+          
+          echo "REPODIGEST_SED_FRIENDLY=$(cat dummy4.txt)" >> $GITHUB_ENV
+          
+      - name: Generate bundle
+        run: |
+          sed -i -e \
+          's/repoDigestPlaceHolder/${{ env.REPODIGEST_SED_FRIENDLY }}/; s/creationDatePlaceHolder/${{ env.CREATIONDATE }}/; s/versionPlaceHolder/${{ env.BUNDLEVERSIONLATEST }}/; ' config/manifests/bases/apimatic-codegen-operator.clusterserviceversion.yaml
+          
+          make bundle VERSION=${{ env.BUNDLEVERSIONLATEST }} CHANNELS="beta" DEFAULT_CHANNEL="beta" IMG=${{ env.REPODIGEST }}
+          
+          cat openshiftannotations.yaml >> bundle/metadata/annotations.yaml 
+          
+          cat bundle/manifests/apimatic-codegen-operator.clusterserviceversion.yaml
+          
+          cat bundle/metadata/annotations.yaml
+          
+          ls -R bundle
+
+      - name: Make payload folder and add bundle contents
+        run: |
+          mkdir payload
+          
+          echo ${{ env.CODEGENVERSIONLATEST }} > codegenversionlatest.txt
+          
+          cp codegenversionlatest.txt payload/codegenversionlatest.txt
+          
+          cp -R bundle/* payload/
+          
+          cp ci.yaml payload/ci.yaml
+          
+          ls -R payload
+
+      - name: Upload payload for next job in sequence
+        uses: actions/upload-artifact@v2
+        with:
+          name: payload
+          path: payload/
+          retention-days: 1
+          
+      - name: Github CLI Login
+        run: |
+          echo ${{ secrets.PAT }} | gh auth login --with-token
+          
+      - name: Remove existing outdated certified-operators repo
+        run: |
+          gh repo delete openshift-certified-operators --confirm
+        continue-on-error: true
+          
+      - name: Fork certified-operators repo from RedHat
+        run: |
+          gh repo fork redhat-openshift-ecosystem/certified-operators --fork-name openshift-certified-operators --clone=false --remote=false
+        if: always()
+        
+        
+  publish_make_pr:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+    
+      - uses: actions/checkout@v3
+        with:
+          repository: redhat-openshift-ecosystem/certified-operators
+          token: ${{ secrets.PAT }}
+
+      - name: Download payload from build job
+        uses: actions/download-artifact@v2
+        with:
+          name: payload
+          path: payload/
+
+      - name: Get latest codegenversion from codegenversionlatest.txt, make env variable and delete codegenversionlatest.txt
+        run: |
+          echo "CODEGENVERSIONLATEST=$(cat payload/codegenversionlatest.txt)" >> $GITHUB_ENV
+          
+          rm payload/codegenversionlatest.txt
+
+      - name: Make apimatic-codegen-operator directory if not created and add ci.yaml file in the root and then delete ci.yaml from payload
+        run: |
+          mkdir -p operators/apimatic-codegen-operator
+          
+          cp -u payload/ci.yaml operators/apimatic-codegen-operator/ci.yaml
+          
+          rm payload/ci.yaml
+
+      - name: Make version directory and add manifests contents
+        run: |
+          mkdir operators/apimatic-codegen-operator/${{ env.CODEGENVERSIONLATEST }}
+          
+          cp -R payload/* operators/apimatic-codegen-operator/${{ env.CODEGENVERSIONLATEST }}/
+          
+          rm -R payload
+          
+      - name: Create Pull Request on Forked RedHat Certified Operators GitHub Repo 
+        uses: peter-evans/create-pull-request@v4
+        with:
+          token: ${{ secrets.PAT }}
+          title: operator apimatic-codegen-operator (${{ env.CODEGENVERSIONLATEST }})
+          push-to-fork: ${{ github.repository_owner }}/openshift-certified-operators
+          

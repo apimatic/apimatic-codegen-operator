@@ -1,0 +1,69 @@
+name: Operator Image Deploy
+
+on:
+  workflow_dispatch:
+
+env:
+
+  PREFLIGHT_REPO: quay.io/opdev/preflight:stable
+  DOCKER_CONFIG_PATH: /home/runner/.docker/config.json
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install CLI tools from OpenShift Mirror
+        uses: redhat-actions/openshift-tools-installer@v1
+        with:
+          skip_cache: true
+          operator-sdk: 'latest'
+
+      - name: Run tests
+        run: make generate manifests test
+
+      - name: Login to Redhat Connect Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.REDHAT_REGISTRY }}
+          username: ${{ secrets.REDHAT_REGISTRY_USER }}
+          password: ${{ secrets.REDHAT_REGISTRY_PSWD }}
+
+      - name: Pull latest APIMatic CodeGen Image and Get Version
+        run: |
+          docker pull ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-ubi8:latest
+          echo $(docker inspect --format "{{.Config.Labels.version}}" ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-ubi8:latest) | sed 's/v//' >> dummy.txt 
+          echo "CODEGENVERSIONLATEST=v$(cat dummy.txt)" >> $GITHUB_ENV
+          echo "BUNDLEVERSIONLATEST=$(cat dummy.txt)" >> $GITHUB_ENV
+
+      - name: Replace CodeGen image version in Dockerfile before building operator image
+        run: |
+          cat DockerfileCICD | sed 's/versiontoupdateplaceholder/${{ env.CODEGENVERSIONLATEST }}/' >> Dockerfile2
+          cat Dockerfile2
+
+      - name: Login to Redhat Certification Registry for Kubernetes Operator
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}
+          username: ${{ secrets.REDHAT_OPERATOR_PROJECT_USER }}
+          password: ${{ secrets.REDHAT_OPERATOR_PROJECT_PSWD }}
+
+      - name: Create image and push to Redhat certification repo
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}/${{ secrets.REDHAT_OPERATOR_REGISTRY_PID }}/apimatic-codegen-operator:${{ env.CODEGENVERSIONLATEST }}
+          file: ./Dockerfile2
+
+      - name: Pull preflight image, run validation and submit validation results to RedHat
+        run: |
+          docker pull ${{ env.PREFLIGHT_REPO }}
+          docker run --rm -v ${{ env.DOCKER_CONFIG_PATH }}:${{ env.DOCKER_CONFIG_PATH }} \
+          --env PFLT_DOCKERCONFIG=${{ env.DOCKER_CONFIG_PATH }} \
+          --env PFLT_PYXIS_API_TOKEN=${{ secrets.PYXIS_API_TOKEN }} \
+          --env PFLT_CERTIFICATION_PROJECT_ID=${{ secrets.CERTIFICATION_PROJECT_ID }} \
+          ${{ env.PREFLIGHT_REPO }} \
+          check container ${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}/${{ secrets.REDHAT_OPERATOR_REGISTRY_PID }}/apimatic-codegen-operator:${{ env.CODEGENVERSIONLATEST }} --submit
+        

@@ -1,0 +1,39 @@
+# Build the manager binary
+FROM golang:1.16 as builder
+
+WORKDIR /workspace
+# Copy the Go Modules manifests
+COPY go.mod go.mod
+COPY go.sum go.sum
+# cache deps before building and copying source so that we don't need to re-download as much
+# and so that source changes don't invalidate our downloaded layer
+RUN go mod download
+
+# Copy the go source
+COPY main.go main.go
+COPY api/ api/
+COPY controllers/ controllers/
+
+# Build
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o manager main.go
+
+# base UBI8 image
+FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
+WORKDIR /
+
+#Required RedHat and Other Labels
+LABEL name="APIMatic CodeGen Operator" \
+      maintainer="support@apimatic.io" \
+      vendor="APIMatic.io" \
+      version="v1.0.0" \
+      release="1" \
+      summary="APIMatic CodeGen Operator for setting up necessary resources to run APIMatic CodeGen application." \
+      description="The APIMatic CodeGen Operator makes setting up APIMatic CodeGen applications on RedHat OpenShift a hassle-free experience." \
+      io.openshift.tags="operator,APIMatic,Developer Tools,API SDKs,API Docs,DX Portals" \
+      io.k8s.description="APIMatic CodeGen Operator for setting up necessary resources to run APIMatic CodeGen application." \
+      io.k8s.display-name="APIMatic CodeGen Operator"
+     
+COPY --from=builder /workspace/manager .
+COPY licenses licenses
+USER 65532:65532
+ENTRYPOINT ["/manager"]
