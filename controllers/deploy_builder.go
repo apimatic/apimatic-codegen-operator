@@ -45,7 +45,7 @@ var (
 		Handler: corev1.Handler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: PROBEROUTE,
-				Port: intstr.FromInt(80),
+				Port: intstr.FromInt(8080),
 				HTTPHeaders: []corev1.HTTPHeader{{
 					Name:  "Accept",
 					Value: "application/json",
@@ -91,8 +91,8 @@ func serviceForCodeGen(codegen *apicodegenv1beta2.CodeGen) *corev1.Service {
 			Type:     codegen.Spec.ServiceSpec.Type,
 			Ports: []corev1.ServicePort{{
 				Name:       codegen.Spec.ServiceSpec.CodeGenServicePort.Name,
-				TargetPort: intstr.FromInt(80),
-				Port:       80,
+				TargetPort: intstr.FromInt(8080),
+				Port:       8080,
 			}},
 		},
 	}
@@ -147,7 +147,7 @@ func deploymentForCodeGen(codegen *apicodegenv1beta2.CodeGen) *appsv1.Deployment
 						Image: *codegen.Spec.PodSpec.CodeGenContainerSpec.Image,
 						Name:  CONTAINERNAME,
 						Ports: []corev1.ContainerPort{{
-							ContainerPort: 80,
+							ContainerPort: 8080,
 						}},
 						LivenessProbe:  &ContainerProbe,
 						ReadinessProbe: &ContainerProbe,
