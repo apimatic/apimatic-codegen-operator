@@ -35,7 +35,6 @@ jobs:
           docker pull ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-ubi8:latest
           echo $(docker inspect --format "{{.Config.Labels.version}}" ${{ secrets.REDHAT_REGISTRY }}/apimatic/apimatic-codegen-ubi8:latest) | sed 's/v//' >> dummy.txt 
           echo "CODEGENVERSIONLATEST=v$(cat dummy.txt)" >> $GITHUB_ENV
-          echo "BUNDLEVERSIONLATEST=$(cat dummy.txt)" >> $GITHUB_ENV
 
       - name: Replace CodeGen image version in Dockerfile before building operator image
         run: |
@@ -54,7 +53,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}/${{ secrets.REDHAT_OPERATOR_REGISTRY_PID }}/apimatic-codegen-operator:${{ env.CODEGENVERSIONLATEST }}
+          tags: ${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}/redhat-isv-containers/${{ secrets.CERTIFICATION_PROJECT_ID }}:${{ env.CODEGENVERSIONLATEST }},${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}/redhat-isv-containers/${{ secrets.CERTIFICATION_PROJECT_ID }}:latest
           file: ./Dockerfile2
 
       - name: Pull preflight image, run validation and submit validation results to RedHat
@@ -65,5 +64,5 @@ jobs:
           --env PFLT_PYXIS_API_TOKEN=${{ secrets.PYXIS_API_TOKEN }} \
           --env PFLT_CERTIFICATION_PROJECT_ID=${{ secrets.CERTIFICATION_PROJECT_ID }} \
           ${{ env.PREFLIGHT_REPO }} \
-          check container ${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}/${{ secrets.REDHAT_OPERATOR_REGISTRY_PID }}/apimatic-codegen-operator:${{ env.CODEGENVERSIONLATEST }} --submit
+          check container ${{ secrets.REDHAT_CERTIFICATION_REGISTRY }}/redhat-isv-containers/${{ secrets.CERTIFICATION_PROJECT_ID }}:${{ env.CODEGENVERSIONLATEST }} --submit
         
